@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quiz de Conducción en Terreno 3D con Cámara Estabilizada</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <style>
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+
+        }
+
+        #scene {
+            width: 100%;
+            height: 100%;
+        }
+
+        #quiz {
+            height: 20%;
+            width: 100%;
+            position: absolute;
+            bottom: 0;
+            background-color: rgba(0, 0, 0, 0);
+            padding: 10px;
+            box-sizing: border-box;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="scene"></div>
+    <div id="quiz">
+        <h2>Pregunta:</h2>
+        <p id="question"></p>
+        <button onclick="checkAnswer('A')">A</button>
+        <button onclick="checkAnswer('B')">B</button>
+        <button onclick="checkAnswer('C')">C</button>
+    </div>
+
+    <script>
+        let scene, camera, renderer, car, terrain;
+        let currentQuestionIndex = 0;
+        let heightData;
+        let keys = { w: false, a: false, s: false, d: false };
+        let carDirection = new THREE.Vector3(0, 0, -1);
+        let currentCarQuaternion = new THREE.Quaternion();
+        let cameraPosition = new THREE.Vector3();
+        let cameraLookAt = new THREE.Vector3();
+
+
+        const questions = [
+            {
+                question: "¿Cuál es la velocidad máxima en una zona residencial?",
+                answer: "B",
+                options: ["60 km/h", "50 km/h", "70 km/h"]
+            },
+            {
+                question: "¿Qué significa una señal de tráfico triangular roja?",
+                answer: "A",
+                options: ["Ceda el paso", "Stop", "Prohibido el paso"]
+            }
+        ];
+
+        function init() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / (window.innerHeight * 0.8), 0.1, 1000);
+            renderer = new THREE.WebGLRenderer();
+            renderer.setSize(window.innerWidth, window.innerHeight * 0.8);
+            document.getElementById('scene').appendChild(renderer.domElement);
+
+            // Agregar skybox
+            const loaderx = new THREE.TextureLoader();
+            loaderx.load('sky.jpg', function (texture) {
+                const rt = new THREE.WebGLCubeRenderTarget(texture.image.height);
+                rt.fromEquirectangularTexture(renderer, texture);
+                scene.background = rt.texture;
+            });
+
+            // Cargar la imagen del mapa de elevación y crear el terreno
+            const loader = new THREE.TextureLoader();
+            loader.load('heightmap.png', function (heightMap) {
+                heightData = getHeightData(heightMap.image);
+                loader.load('map.png', function (terrainTexture) {
+                    createTerrain(heightMap, terrainTexture);
+                    createCar();
+                    createHouses();
+                    displayQuestion();
+                    animate();
+                });
+            });
+
+            // Iluminación
+            const ambientLight = new THREE.AmbientLight(0xFFF2CC, 0.65);
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xFFFFFF, 0.95);
+            directionalLight.position.set(0, 0, 0.1);
+            scene.add(directionalLight);
+
+            // Eventos de teclado
+            document.addEventListener('keydown', onKeyDown);
+            document.addEventListener('keyup', onKeyUp);
+        }
+
+        function onKeyDown(event) {
+            const key = event.key.toLowerCase();
+            if (key in keys) {
+                keys[key] = true;
+            }
+        }
+
+        function onKeyUp(event) {
+            const key = event.key.toLowerCase();
+            if (key in keys) {
+                keys[key] = false;
+            }
+        }
+
+        //altura con mapa
+
+        function getHeightData(img) {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const context = canvas.getContext('2d');
+            context.drawImage(img, 0, 0);
+            const imgData = context.getImageData(0, 0, img.width, img.height);
+            const data = new Float32Array(imgData.data.length / 4);
+            for (let i = 0; i < imgData.data.length; i += 4) {
+                data[i / 4] = imgData.data[i] / 255;
+            }
+            return data;
+        }
+
+        function createTerrain(heightMap, terrainTexture) {
+            const geometry = new THREE.PlaneGeometry(500, 500, 256, 256);
+            const material = new THREE.MeshPhongMaterial({
+                displacementMap: heightMap,
+                displacementScale: 60,
+                map: terrainTexture,
+                side: THREE.DoubleSide
+            });
+
+            terrain = new THREE.Mesh(geometry, material);
+            terrain.rotation.x = -Math.PI / 2;
+            scene.add(terrain);
+        }
+
+        //auto
+
+        function createCar() {
+            const carGeometry = new THREE.BoxGeometry(0.25, 0.125, 0.5);
+            const carMaterial = new THREE.MeshPhongMaterial({ color: 0xff0000 });
+            car = new THREE.Mesh(carGeometry, carMaterial);
+            car.position.set(0, 0, 0);
+            scene.add(car);
+            updateCarPosition();
+        }
+
+
+        //casas
+
+        /*         function createHouses() {
+                     const houseGeometry = new THREE.BoxGeometry(2, 2, 2);
+                    const houseMaterial = new THREE.MeshPhongMaterial({color: 0xcccccc}); 
+                    
+                    for (let i = 0; i < 100; i++) {
+                        const house = new THREE.Mesh(houseGeometry, houseMaterial);
+                        const x = (Math.random() - 0.5) * 100;
+                        const z = (Math.random() - 0.5) * 100;
+                        const y = getHeightAtPosition(x, z) + 7.5;
+                        house.position.set(x, y, z);
+                        scene.add(house); 
+        
+                         const roofGeometry = new THREE.ConeGeometry(8, 2, 4);
+                        const roofMaterial = new THREE.MeshPhongMaterial({color: 0x8b4513});
+                        const roof = new THREE.Mesh(roofGeometry, roofMaterial);
+                        roof.position.set(x, y + 10, z);
+                        roof.rotation.y = Math.PI / 4;
+                        scene.add(roof); 
+                    }
+                } */
+
+        //casas varias
+
+        function createHouses() {
+            const houseGeometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+            const houseMaterial = new THREE.MeshPhongMaterial({ color: 0x999999 });
+
+            const terrainSize = 500;
+            const numHouses = 100000;
+            const gridSize = 6; // Tamaño de la cuadrícula para agrupar casas
+            const minHeight = 1; // Altura mínima para construir
+            const maxHeight = 4.0; // Altura máxima para construir
+
+            const neighborhoods = [];
+            const gridDivisions = terrainSize / gridSize;
+
+            // Identificar áreas potenciales para barrios
+            for (let i = 0; i < gridDivisions; i++) {
+                for (let j = 0; j < gridDivisions; j++) {
+                    const x = (i - gridDivisions / 2) * gridSize;
+                    const z = (j - gridDivisions / 2) * gridSize;
+                    const height = getHeightAtPosition(x, z);
+
+                    if (height > minHeight && height < maxHeight) {
+                        neighborhoods.push({ x, z, height, ordered: Math.random() > 0.5 });
+                    }
+                }
+            }
+
+            console.log(`Found ${neighborhoods.length} potential neighborhood areas`);
+
+            let housesPlaced = 0;
+            neighborhoods.sort((a, b) => b.height - a.height); // Priorizar áreas más altas dentro del rango permitido
+
+            for (const neighborhood of neighborhoods) {
+                if (housesPlaced >= numHouses) break;
+
+                const housesInNeighborhood = Math.floor(Math.random() * 5) + 15; // 7 a 11 casas por barrio
+
+                for (let i = 0; i < housesInNeighborhood; i++) {
+                    if (housesPlaced >= numHouses) break;
+
+                    let x, z;
+                    if (neighborhood.ordered) {
+                        // Patrón ordenado
+                        x = neighborhood.x + (i % 3 - 1) * 5;
+                        z = neighborhood.z + (Math.floor(i / 3) - 1) * 5;
+                    } else {
+                        // Patrón desordenado
+                        x = neighborhood.x + (Math.random() - 0.5) * gridSize;
+                        z = neighborhood.z + (Math.random() - 0.5) * gridSize;
+                    }
+
+                    const y = getHeightAtPosition(x, z) + 0.25;
+
+                    if (y > minHeight && y < maxHeight) {
+                        const house = new THREE.Mesh(houseGeometry, houseMaterial);
+                        house.position.set(x, y, z);
+                        scene.add(house);
+
+                        housesPlaced++;
+                        console.log(`House placed at (${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)}). Height: ${y.toFixed(2)}`);
+                    }
+                }
+            }
+
+            console.log(`House placement complete. ${housesPlaced} houses placed.`);
+        }
+
+
+
+
+
+
+        function getHeightAtPosition(x, z) {
+            if (!heightData) return 0;
+
+            const terrainSize = 500;
+            const resolution = Math.sqrt(heightData.length);
+            const xSample = Math.round((x + terrainSize / 2) / terrainSize * (resolution - 1));
+            const zSample = Math.round((z + terrainSize / 2) / terrainSize * (resolution - 1));
+            const sample = zSample * resolution + xSample;
+            return heightData[sample] * 60; // 60 es el displacementScale
+        }
+
+        function updateCarPosition() {
+            const speed = 0.15;
+            const rotationSpeed = 0.01;
+
+            // Actualizar la dirección del auto basada en las teclas de giro
+            if (keys.a) {
+                carDirection.applyAxisAngle(new THREE.Vector3(0, 1, 0), rotationSpeed);
+            }
+            if (keys.d) {
+                carDirection.applyAxisAngle(new THREE.Vector3(0, 1, 0), -rotationSpeed);
+            }
+
+            // Mover el auto en la dirección actual
+            if (keys.w) {
+                car.position.add(carDirection.clone().multiplyScalar(speed));
+            }
+            if (keys.s) {
+                car.position.add(carDirection.clone().multiplyScalar(-speed));
+            }
+
+            const height = getHeightAtPosition(car.position.x, car.position.z);
+            car.position.y = height + 0.25; // +0.5 para que esté ligeramente por encima del terreno
+
+            // Calcular la normal del terreno
+            const normalX = getHeightAtPosition(car.position.x + 1, car.position.z) - height;
+            const normalZ = getHeightAtPosition(car.position.x, car.position.z + 1) - height;
+            const normal = new THREE.Vector3(-normalX, 1, -normalZ).normalize();
+
+            // Calcular la rotación del auto basada en la normal del terreno y la dirección
+            const up = new THREE.Vector3(0, 1, 0);
+            const right = new THREE.Vector3().crossVectors(carDirection, up).normalize();
+            const matrix = new THREE.Matrix4().makeBasis(right, up, carDirection.clone().negate());
+            const slopeRotation = new THREE.Quaternion().setFromRotationMatrix(matrix);
+
+            // Calcular la inclinación basada en la normal del terreno
+            const slopeAxis = new THREE.Vector3().crossVectors(up, normal).normalize();
+            const slopeAngle = Math.acos(up.dot(normal));
+            const slopeQuaternion = new THREE.Quaternion().setFromAxisAngle(slopeAxis, slopeAngle);
+
+            // Combinar las rotaciones
+            const targetQuaternion = new THREE.Quaternion().multiplyQuaternions(slopeQuaternion, slopeRotation);
+
+            // Interpolar suavemente entre la rotación actual y la rotación objetivo
+            const interpolationFactor = 0.1; // Ajusta este valor para cambiar la velocidad de suavizado
+            currentCarQuaternion.slerp(targetQuaternion, interpolationFactor);
+
+            // Aplicar la rotación suavizada al auto
+            car.quaternion.copy(currentCarQuaternion);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            updateCarPosition();
+            updateCamera();
+            renderer.render(scene, camera);
+        }
+
+        function updateCamera() {
+            const offset = new THREE.Vector3(0.2, 1.1, 2);
+            offset.applyQuaternion(car.quaternion);
+            const targetCameraPosition = car.position.clone().add(offset);
+            const targetLookAt = car.position.clone();
+
+            // Suavizar la posición de la cámara
+            cameraPosition.lerp(targetCameraPosition, 0.1);
+            cameraLookAt.lerp(targetLookAt, 0.1);
+
+            camera.position.copy(cameraPosition);
+            camera.lookAt(cameraLookAt);
+        }
+
+        function displayQuestion() {
+            const currentQuestion = questions[currentQuestionIndex];
+            document.getElementById('question').textContent = currentQuestion.question;
+        }
+
+        function checkAnswer(selectedAnswer) {
+            const currentQuestion = questions[currentQuestionIndex];
+            if (selectedAnswer === currentQuestion.answer) {
+                alert("¡Correcto!");
+                currentQuestionIndex++;
+                if (currentQuestionIndex < questions.length) {
+                    displayQuestion();
+                } else {
+                    alert("¡Has completado el quiz!");
+                }
+            } else {
+                alert("Incorrecto. Inténtalo de nuevo.");
+            }
+        }
+
+        window.onload = init;
+        window.addEventListener('resize', function () {
+            camera.aspect = window.innerWidth / (window.innerHeight * 0.8);
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight * 0.8);
+        });
+    </script>
+</body>
+
+</html>
